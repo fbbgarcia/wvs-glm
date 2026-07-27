@@ -1,0 +1,1564 @@
+---
+title: "World Values Survey Analysis"
+author: "Franchesca Garcia"
+format: 
+  pdf:
+    warning: false
+    message: false
+    toc: true
+    toc-depth: 2
+editor: visual
+---
+
+```{r load in packages}
+library(tidyverse)
+library(car)
+library(pROC)
+library(caret)
+library(AICcmodavg)
+library(performance)
+```
+
+```{r load in data}
+WVS <- read_csv("WVS.csv")
+
+# cast predictors to factors
+WVS$gender <- factor(WVS$gender)
+WVS$religion <- factor(WVS$religion)
+WVS$degree <- factor(WVS$degree)
+WVS$country <- factor(WVS$country)
+WVS$age <- factor(WVS$age)
+
+# compute numbers of trials
+WVS$total <- WVS$yes + WVS$no
+
+# drop rows with 0 trials
+WVS <- WVS |>
+  filter(total > 0)
+
+# compute proportions
+WVS$prop <- WVS$yes/WVS$total
+```
+
+```{r ungroup data}
+# ungroup data for roc-auc analysis
+yes <- WVS |>
+  uncount(yes) |>
+  mutate(resp = 1)
+no <- WVS |>
+  uncount(no) |>
+  mutate(resp = 0)
+
+WVS_ungrouped <- bind_rows(yes, no) |>
+  select(-c(yes, no))
+
+rm(yes, no)
+```
+
+## Model 1: logit, all predictors
+
+### 1.
+
+```{r model1 fit}
+model1 <- glm(cbind(yes, no) ~ gender + religion + degree + country + age, family = binomial(link="logit"), data = WVS)
+
+summary(model1)
+```
+
+### 2.
+
+```{r model1 gof test}
+pchisq(deviance(model1), df.residual(model1), lower.tail = FALSE)
+```
+
+### 3.
+
+```{r model1 sample size check}
+model1_df = data_frame()
+
+WVS$model1_preds <- fitted(model1, type="response")
+model1_df = data_frame(yes = WVS$yes,
+                       no = WVS$no,
+                       pred_yes = WVS$total * WVS$model1_preds,
+                       pred_no = WVS$total * (1 - WVS$model1_preds))
+
+sum(model1_df$pred_yes < 5)
+sum(model1_df$pred_yes < 1)
+sum(model1_df$pred_no < 5)
+sum(model1_df$pred_no < 1)
+```
+
+### 4.
+
+```{r model1 multicolineaity check}
+vif(model1)
+```
+
+### 5.
+
+```{r model1 residuals check}
+residualPlots(model1, type = "deviance", smooth=FALSE)
+residualPlots(model1, type = "pearson", smooth=FALSE)
+```
+
+### 6.
+
+```{r model1 influential obs check}
+p <- length(coef(model1))
+n <- nobs(model1)
+leverage_cutoff <-  (3*p)/n
+cooks_cutoff <- 2/sqrt(n)
+
+model1_inf <- data.frame(
+  obs = seq(n),
+  studentized = rstudent(model1),
+  hat = hatvalues(model1),
+  cooks = cooks.distance(model1)
+)
+
+model1_inf |>
+  ggplot(aes(x = obs, y = studentized)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.25) +
+  geom_hline(yintercept = -3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_hline(yintercept = 3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_segment(aes(xend = obs, y = 0, yend = studentized), linewidth = 0.25) +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Studentized residuals") + 
+  theme_bw()
+
+model1_inf |>
+  ggplot(aes(x = obs, y = hat)) +
+  geom_segment(aes(xend = obs, y = 0, yend = hat), linewidth = 0.25) +
+  geom_hline(yintercept = leverage_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("hat-values") + 
+  theme_bw()
+
+model1_inf |>
+  ggplot(aes(x = obs, y = cooks)) +
+  geom_segment(aes(xend = obs, y = 0, yend = cooks), linewidth = 0.25) +
+  geom_hline(yintercept = cooks_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Cook's distance") + 
+  theme_bw()
+
+model1_inf |>
+  filter(abs(studentized) > 3 |
+         hat > leverage_cutoff |
+         cooks > cooks_cutoff
+  )
+```
+
+### 7.
+
+```{r model1 overdispersion check}
+check_overdispersion(model1)
+```
+
+## Model 2: logit, stepwise selected predictors
+
+### 8.
+
+```{r model2 fit}
+full_model <- glm(cbind(yes, no) ~ (gender + religion + degree + country + age)^2, family = binomial(link="logit"), data = WVS)
+
+model2 <- step(full_model, direction = "both")
+rm(full_model)
+
+summary(model2)
+```
+
+### 9.
+
+```{r model2 gof test}
+pchisq(deviance(model2), df.residual(model2), lower.tail = FALSE)
+```
+
+### 10.
+
+```{r model2 sample size check}
+model2_df = data_frame()
+
+WVS$model2_preds <- fitted(model2, type="response")
+model2_df = data_frame(yes = WVS$yes,
+                       no = WVS$no,
+                       pred_yes = WVS$total * WVS$model2_preds,
+                       pred_no = WVS$total * (1 - WVS$model2_preds))
+
+sum(model2_df$pred_yes < 5)
+sum(model2_df$pred_yes < 1)
+sum(model2_df$pred_no < 5)
+sum(model2_df$pred_no < 1)
+```
+
+### 11.
+
+```{r model2 multicolineaity check}
+vif(model2)
+```
+
+### 12.
+
+```{r model2 residuals check}
+residualPlots(model2, type = "deviance", smooth=FALSE)
+residualPlots(model2, type = "pearson", smooth=FALSE)
+```
+
+### 13.
+
+```{r model2 influential obs check}
+p <- length(coef(model2))
+n <- nobs(model2)
+leverage_cutoff <-  (3*p)/n
+cooks_cutoff <- 2/sqrt(n)
+
+model2_inf <- data.frame(
+  obs = seq(n),
+  studentized = rstudent(model2),
+  hat = hatvalues(model2),
+  cooks = cooks.distance(model2)
+)
+
+model2_inf |>
+  ggplot(aes(x = obs, y = studentized)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.25) +
+  geom_hline(yintercept = -3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_hline(yintercept = 3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_segment(aes(xend = obs, y = 0, yend = studentized), linewidth = 0.25) +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Studentized residuals") + 
+  theme_bw()
+
+model2_inf |>
+  ggplot(aes(x = obs, y = hat)) +
+  geom_segment(aes(xend = obs, y = 0, yend = hat), linewidth = 0.25) +
+  geom_hline(yintercept = leverage_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("hat-values") + 
+  theme_bw()
+
+model2_inf |>
+  ggplot(aes(x = obs, y = cooks)) +
+  geom_segment(aes(xend = obs, y = 0, yend = cooks), linewidth = 0.25) +
+  geom_hline(yintercept = cooks_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Cook's distance") + 
+  theme_bw()
+
+model2_inf |>
+  filter(abs(studentized) > 3 |
+         hat > leverage_cutoff |
+         cooks > cooks_cutoff
+  )
+```
+
+### 14.
+
+```{r model2 overdispersion check}
+check_overdispersion(model2)
+```
+
+## Model 3: probit, all predictors
+
+### 15.
+
+```{r model3 fit}
+model3 <- glm(cbind(yes, no) ~ gender + religion + degree + country + age, family = binomial(link="probit"), data = WVS)
+
+summary(model3)
+```
+
+### 16.
+
+```{r model3 gof test}
+pchisq(deviance(model3), df.residual(model3), lower.tail = FALSE)
+```
+
+### 17.
+
+```{r model3 sample size check}
+model3_df = data_frame()
+
+WVS$model3_preds <- fitted(model3, type="response")
+model3_df = data_frame(yes = WVS$yes,
+                       no = WVS$no,
+                       pred_yes = WVS$total * WVS$model3_preds,
+                       pred_no = WVS$total * (1 - WVS$model3_preds))
+
+sum(model3_df$pred_yes < 5)
+sum(model3_df$pred_yes < 1)
+sum(model3_df$pred_no < 5)
+sum(model3_df$pred_no < 1)
+```
+
+### 18.
+
+```{r model3 multicolineaity check}
+vif(model3)
+```
+
+### 19.
+
+```{r model3 residuals check}
+residualPlots(model3, type = "deviance", smooth=FALSE)
+residualPlots(model3, type = "pearson", smooth=FALSE)
+```
+
+### 20.
+
+```{r model3 influential obs check}
+p <- length(coef(model3))
+n <- nobs(model3)
+leverage_cutoff <-  (3*p)/n
+cooks_cutoff <- 2/sqrt(n)
+
+model3_inf <- data.frame(
+  obs = seq(n),
+  studentized = rstudent(model3),
+  hat = hatvalues(model3),
+  cooks = cooks.distance(model3)
+)
+
+model3_inf |>
+  ggplot(aes(x = obs, y = studentized)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.25) +
+  geom_hline(yintercept = -3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_hline(yintercept = 3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_segment(aes(xend = obs, y = 0, yend = studentized), linewidth = 0.25) +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Studentized residuals") + 
+  theme_bw()
+
+model3_inf |>
+  ggplot(aes(x = obs, y = hat)) +
+  geom_segment(aes(xend = obs, y = 0, yend = hat), linewidth = 0.25) +
+  geom_hline(yintercept = leverage_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("hat-values") + 
+  theme_bw()
+
+model3_inf |>
+  ggplot(aes(x = obs, y = cooks)) +
+  geom_segment(aes(xend = obs, y = 0, yend = cooks), linewidth = 0.25) +
+  geom_hline(yintercept = cooks_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Cook's distance") + 
+  theme_bw()
+
+model3_inf |>
+  filter(abs(studentized) > 3 |
+         hat > leverage_cutoff |
+         cooks > cooks_cutoff
+  )
+```
+
+### 21.
+
+```{r model3 overdispersion check}
+check_overdispersion(model3)
+```
+
+## Model 4: probit, stepwise selected predictors
+
+### 22.
+
+```{r model4 fit}
+full_model <- glm(cbind(yes, no) ~ (gender + religion + degree + country + age)^2, family = binomial(link="probit"), data = WVS)
+
+model4 <- step(full_model, direction = "both")
+rm(full_model)
+
+summary(model4)
+```
+
+### 23.
+
+```{r model4 gof test}
+pchisq(deviance(model4), df.residual(model4), lower.tail = FALSE)
+```
+
+### 24.
+
+```{r model4 sample size check}
+model4_df = data_frame()
+
+WVS$model4_preds <- fitted(model4, type="response")
+model4_df = data_frame(yes = WVS$yes,
+                       no = WVS$no,
+                       pred_yes = WVS$total * WVS$model4_preds,
+                       pred_no = WVS$total * (1 - WVS$model4_preds))
+
+sum(model4_df$pred_yes < 5)
+sum(model4_df$pred_yes < 1)
+sum(model4_df$pred_no < 5)
+sum(model4_df$pred_no < 1)
+```
+
+### 25.
+
+```{r model4 multicolineaity check}
+vif(model4)
+```
+
+### 26.
+
+```{r model4 residuals check}
+residualPlots(model4, type = "deviance", smooth=FALSE)
+residualPlots(model4, type = "pearson", smooth=FALSE)
+```
+
+### 27.
+
+```{r model4 influential obs check}
+p <- length(coef(model4))
+n <- nobs(model4)
+leverage_cutoff <-  (3*p)/n
+cooks_cutoff <- 2/sqrt(n)
+
+model4_inf <- data.frame(
+  obs = seq(n),
+  studentized = rstudent(model4),
+  hat = hatvalues(model4),
+  cooks = cooks.distance(model4)
+)
+
+model4_inf |>
+  ggplot(aes(x = obs, y = studentized)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.25) +
+  geom_hline(yintercept = -3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_hline(yintercept = 3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_segment(aes(xend = obs, y = 0, yend = studentized), linewidth = 0.25) +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Studentized residuals") + 
+  theme_bw()
+
+model4_inf |>
+  ggplot(aes(x = obs, y = hat)) +
+  geom_segment(aes(xend = obs, y = 0, yend = hat), linewidth = 0.25) +
+  geom_hline(yintercept = leverage_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("hat-values") + 
+  theme_bw()
+
+model4_inf |>
+  ggplot(aes(x = obs, y = cooks)) +
+  geom_segment(aes(xend = obs, y = 0, yend = cooks), linewidth = 0.25) +
+  geom_hline(yintercept = cooks_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Cook's distance") + 
+  theme_bw()
+
+model4_inf |>
+  filter(abs(studentized) > 3 |
+         hat > leverage_cutoff |
+         cooks > cooks_cutoff
+  )
+```
+
+### 28.
+
+```{r model4 overdispersion check}
+check_overdispersion(model4)
+```
+
+## Model 5: cloglog, all predictors
+
+### 29.
+
+```{r model5 fit}
+model5 <- glm(cbind(yes, no) ~ gender + religion + degree + country + age, family = binomial(link="cloglog"), data = WVS)
+
+summary(model5)
+```
+
+### 30.
+
+```{r model5 gof test}
+pchisq(deviance(model5), df.residual(model5), lower.tail = FALSE)
+```
+
+### 31.
+
+```{r model5 sample size check}
+model5_df = data_frame()
+
+WVS$model5_preds <- fitted(model5, type="response")
+model5_df = data_frame(yes = WVS$yes,
+                       no = WVS$no,
+                       pred_yes = WVS$total * WVS$model5_preds,
+                       pred_no = WVS$total * (1 - WVS$model5_preds))
+
+sum(model5_df$pred_yes < 5)
+sum(model5_df$pred_yes < 1)
+sum(model5_df$pred_no < 5)
+sum(model5_df$pred_no < 1)
+```
+
+### 32.
+
+```{r model5 multicolineaity check}
+vif(model5)
+```
+
+### 33.
+
+```{r model5 residuals check}
+residualPlots(model5, type = "deviance", smooth=FALSE)
+residualPlots(model5, type = "pearson", smooth=FALSE)
+```
+
+### 34.
+
+```{r model5 influential obs check}
+p <- length(coef(model5))
+n <- nobs(model5)
+leverage_cutoff <-  (3*p)/n
+cooks_cutoff <- 2/sqrt(n)
+
+model5_inf <- data.frame(
+  obs = seq(n),
+  studentized = rstudent(model5),
+  hat = hatvalues(model5),
+  cooks = cooks.distance(model5)
+)
+
+model5_inf |>
+  ggplot(aes(x = obs, y = studentized)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.25) +
+  geom_hline(yintercept = -3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_hline(yintercept = 3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_segment(aes(xend = obs, y = 0, yend = studentized), linewidth = 0.25) +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Studentized residuals") + 
+  theme_bw()
+
+model5_inf |>
+  ggplot(aes(x = obs, y = hat)) +
+  geom_segment(aes(xend = obs, y = 0, yend = hat), linewidth = 0.25) +
+  geom_hline(yintercept = leverage_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("hat-values") + 
+  theme_bw()
+
+model5_inf |>
+  ggplot(aes(x = obs, y = cooks)) +
+  geom_segment(aes(xend = obs, y = 0, yend = cooks), linewidth = 0.25) +
+  geom_hline(yintercept = cooks_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Cook's distance") + 
+  theme_bw()
+
+model5_inf |>
+  filter(abs(studentized) > 3 |
+         hat > leverage_cutoff |
+         cooks > cooks_cutoff
+  )
+```
+
+### 35.
+
+```{r model5 overdispersion check}
+check_overdispersion(model5)
+```
+
+## Model 6: cloglog, stepwise selected predictors
+
+### 36.
+
+```{r model6 fit}
+full_model <- glm(cbind(yes, no) ~ (gender + religion + degree + country + age)^2, family = binomial(link="cloglog"), data = WVS)
+
+model6 <- step(full_model, direction = "both")
+rm(full_model)
+
+summary(model6)
+```
+
+### 37.
+
+```{r model6 gof test}
+pchisq(deviance(model6), df.residual(model6), lower.tail = FALSE)
+```
+
+### 38.
+
+```{r model6 sample size check}
+model6_df = data_frame()
+
+WVS$model6_preds <- fitted(model6, type="response")
+model6_df = data_frame(yes = WVS$yes,
+                       no = WVS$no,
+                       pred_yes = WVS$total * WVS$model6_preds,
+                       pred_no = WVS$total * (1 - WVS$model6_preds))
+
+sum(model6_df$pred_yes < 5)
+sum(model6_df$pred_yes < 1)
+sum(model6_df$pred_no < 5)
+sum(model6_df$pred_no < 1)
+```
+
+### 39.
+
+```{r model6 multicolineaity check}
+vif(model6)
+```
+
+### 40.
+
+```{r model6 residuals check}
+residualPlots(model6, type = "deviance", smooth=FALSE)
+residualPlots(model6, type = "pearson", smooth=FALSE)
+```
+
+### 41.
+
+```{r model6 influential obs check}
+p <- length(coef(model6))
+n <- nobs(model6)
+leverage_cutoff <-  (3*p)/n
+cooks_cutoff <- 2/sqrt(n)
+
+model6_inf <- data.frame(
+  obs = seq(n),
+  studentized = rstudent(model6),
+  hat = hatvalues(model6),
+  cooks = cooks.distance(model6)
+)
+
+model6_inf |>
+  ggplot(aes(x = obs, y = studentized)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.25) +
+  geom_hline(yintercept = -3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_hline(yintercept = 3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_segment(aes(xend = obs, y = 0, yend = studentized), linewidth = 0.25) +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Studentized residuals") + 
+  theme_bw()
+
+model6_inf |>
+  ggplot(aes(x = obs, y = hat)) +
+  geom_segment(aes(xend = obs, y = 0, yend = hat), linewidth = 0.25) +
+  geom_hline(yintercept = leverage_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("hat-values") + 
+  theme_bw()
+
+model6_inf |>
+  ggplot(aes(x = obs, y = cooks)) +
+  geom_segment(aes(xend = obs, y = 0, yend = cooks), linewidth = 0.25) +
+  geom_hline(yintercept = cooks_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Cook's distance") + 
+  theme_bw()
+
+model6_inf |>
+  filter(abs(studentized) > 3 |
+         hat > leverage_cutoff |
+         cooks > cooks_cutoff
+  )
+```
+
+### 42.
+
+```{r model6 overdispersion check}
+check_overdispersion(model6)
+```
+
+## Model 7: loglog, all predictors
+
+### 43.
+
+```{r model7 fit}
+model7 <- glm(cbind(no, yes) ~ gender + religion + degree + country + age, family = binomial(link="cloglog"), data = WVS)
+
+summary(model7)
+```
+
+### 44.
+
+```{r model7 gof test}
+pchisq(deviance(model7), df.residual(model7), lower.tail = FALSE)
+```
+
+### 45.
+
+```{r model7 sample size check}
+model7_df = data_frame()
+
+WVS$model7_preds <- fitted(model7, type="response")
+model7_df = data_frame(yes = WVS$yes,
+                       no = WVS$no,
+                       pred_yes = WVS$total * WVS$model7_preds,
+                       pred_no = WVS$total * (1 - WVS$model7_preds))
+
+sum(model7_df$pred_yes < 5)
+sum(model7_df$pred_yes < 1)
+sum(model7_df$pred_no < 5)
+sum(model7_df$pred_no < 1)
+```
+
+### 46.
+
+```{r model7 multicolineaity check}
+vif(model7)
+```
+
+### 47.
+
+```{r model7 residuals check}
+residualPlots(model7, type = "deviance", smooth=FALSE)
+residualPlots(model7, type = "pearson", smooth=FALSE)
+```
+
+### 48.
+
+```{r model7 influential obs check}
+p <- length(coef(model7))
+n <- nobs(model7)
+leverage_cutoff <-  (3*p)/n
+cooks_cutoff <- 2/sqrt(n)
+
+model7_inf <- data.frame(
+  obs = seq(n),
+  studentized = rstudent(model7),
+  hat = hatvalues(model7),
+  cooks = cooks.distance(model7)
+)
+
+model7_inf |>
+  ggplot(aes(x = obs, y = studentized)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.25) +
+  geom_hline(yintercept = -3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_hline(yintercept = 3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_segment(aes(xend = obs, y = 0, yend = studentized), linewidth = 0.25) +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Studentized residuals") + 
+  theme_bw()
+
+model7_inf |>
+  ggplot(aes(x = obs, y = hat)) +
+  geom_segment(aes(xend = obs, y = 0, yend = hat), linewidth = 0.25) +
+  geom_hline(yintercept = leverage_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("hat-values") + 
+  theme_bw()
+
+model7_inf |>
+  ggplot(aes(x = obs, y = cooks)) +
+  geom_segment(aes(xend = obs, y = 0, yend = cooks), linewidth = 0.25) +
+  geom_hline(yintercept = cooks_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Cook's distance") + 
+  theme_bw()
+
+model7_inf |>
+  filter(abs(studentized) > 3 |
+         hat > leverage_cutoff |
+         cooks > cooks_cutoff
+  )
+```
+
+### 49.
+
+```{r model7 overdispersion check}
+check_overdispersion(model7)
+```
+
+## Model 8: loglog, stepwise selected predictors
+
+### 50.
+
+```{r model8 fit}
+full_model <- glm(cbind(no, yes) ~ (gender + religion + degree + country + age)^2, family = binomial(link="cloglog"), data = WVS)
+
+model8 <- step(full_model, direction = "both")
+rm(full_model)
+
+summary(model8)
+```
+
+### 51.
+
+```{r model8 gof test}
+pchisq(deviance(model8), df.residual(model8), lower.tail = FALSE)
+```
+
+### 52.
+
+```{r model8 sample size check}
+model8_df = data_frame()
+
+WVS$model8_preds <- fitted(model2, type="response")
+model8_df = data_frame(yes = WVS$yes,
+                       no = WVS$no,
+                       pred_yes = WVS$total * WVS$model8_preds,
+                       pred_no = WVS$total * (1 - WVS$model8_preds))
+
+sum(model8_df$pred_yes < 5)
+sum(model8_df$pred_yes < 1)
+sum(model8_df$pred_no < 5)
+sum(model8_df$pred_no < 1)
+```
+
+### 53.
+
+```{r model8 multicolineaity check}
+vif(model8)
+```
+
+### 54.
+
+```{r model8 residuals check}
+residualPlots(model8, type = "deviance", smooth=FALSE)
+residualPlots(model8, type = "pearson", smooth=FALSE)
+```
+
+### 55.
+
+```{r model8 influential obs check}
+p <- length(coef(model8))
+n <- nobs(model8)
+leverage_cutoff <-  (3*p)/n
+cooks_cutoff <- 2/sqrt(n)
+
+model8_inf <- data.frame(
+  obs = seq(n),
+  studentized = rstudent(model8),
+  hat = hatvalues(model8),
+  cooks = cooks.distance(model8)
+)
+
+model8_inf |>
+  ggplot(aes(x = obs, y = studentized)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.25) +
+  geom_hline(yintercept = -3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_hline(yintercept = 3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_segment(aes(xend = obs, y = 0, yend = studentized), linewidth = 0.25) +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Studentized residuals") + 
+  theme_bw()
+
+model8_inf |>
+  ggplot(aes(x = obs, y = hat)) +
+  geom_segment(aes(xend = obs, y = 0, yend = hat), linewidth = 0.25) +
+  geom_hline(yintercept = leverage_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("hat-values") + 
+  theme_bw()
+
+model8_inf |>
+  ggplot(aes(x = obs, y = cooks)) +
+  geom_segment(aes(xend = obs, y = 0, yend = cooks), linewidth = 0.25) +
+  geom_hline(yintercept = cooks_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Cook's distance") + 
+  theme_bw()
+
+model8_inf |>
+  filter(abs(studentized) > 3 |
+         hat > leverage_cutoff |
+         cooks > cooks_cutoff
+  )
+```
+
+### 56.
+
+```{r model8 overdispersion check}
+check_overdispersion(model8)
+```
+
+## Model 2, 4, 6, 8 AIC comparisons
+
+### 57.
+
+```{r step aic}
+AIC(model2)
+AIC(model4)
+AIC(model6)
+AIC(model8)
+```
+
+## Models 9-10: logit, manually reduced variables
+
+### 58.
+
+```{r model2 lrts}
+model2_lrt <- Anova(model2)
+model2_lrt_p <- model2_lrt[, "Pr(>Chisq)"]
+
+cbind(model2_lrt, p.adj = p.adjust(model2_lrt_p, method = "BH")) |>
+  filter(p.adj > 0.05)
+```
+
+### 59.
+
+```{r model9 fit}
+model9 <- update(model2, . ~ . - gender:degree)
+summary(model9)
+```
+
+### 60.
+
+```{r model9 vs model2 lrt}
+anova(model2, model9)
+```
+
+### 61.
+
+```{r model9 lrts}
+model9_lrt <- Anova(model9)
+model9_lrt_p <- model9_lrt[, "Pr(>Chisq)"]
+
+cbind(model9_lrt, p.adj = p.adjust(model9_lrt_p, method = "BH")) |>
+  filter(p.adj > 0.05)
+```
+
+### 62.
+
+```{r model10 fit}
+model10 <- update(model9, . ~ . - religion:age)
+summary(model10)
+```
+
+### 63.
+
+```{r model10 vs model9 lrt}
+anova(model9, model10)
+```
+
+### 64.
+
+```{r model10 lrts}
+model10_lrt <- Anova(model10)
+model9_lrt_10 <- model10_lrt[, "Pr(>Chisq)"]
+
+cbind(model10_lrt, p.adj = p.adjust(model9_lrt_10, method = "BH")) |>
+  filter(p.adj > 0.05)
+```
+
+### 65.
+
+```{r model10 gof test}
+pchisq(deviance(model10), df.residual(model10), lower.tail = FALSE)
+```
+
+### 66.
+
+```{r model10 sample size check}
+model10_df = data_frame()
+
+WVS$model10_preds <- fitted(model10, type="response")
+model10_df = data_frame(yes = WVS$yes,
+                       no = WVS$no,
+                       pred_yes = WVS$total * WVS$model10_preds,
+                       pred_no = WVS$total * (1 - WVS$model10_preds))
+
+sum(model10_df$pred_yes < 5)
+sum(model10_df$pred_yes < 1)
+sum(model10_df$pred_no < 5)
+sum(model10_df$pred_no < 1)
+```
+
+### 67.
+
+```{r model10 multicolineaity check}
+vif(model10)
+```
+
+### 68.
+
+```{r model10 residuals check}
+residualPlots(model10, type = "deviance", smooth=FALSE)
+residualPlots(model10, type = "pearson", smooth=FALSE)
+```
+
+### 69.
+
+```{r model10 influential obs check}
+p <- length(coef(model10))
+n <- nobs(model10)
+leverage_cutoff <-  (3*p)/n
+cooks_cutoff <- 2/sqrt(n)
+
+model10_inf <- data.frame(
+  obs = seq(n),
+  studentized = rstudent(model10),
+  hat = hatvalues(model10),
+  cooks = cooks.distance(model10)
+)
+
+model10_inf |>
+  ggplot(aes(x = obs, y = studentized)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.25) +
+  geom_hline(yintercept = -3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_hline(yintercept = 3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_segment(aes(xend = obs, y = 0, yend = studentized), linewidth = 0.25) +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Studentized residuals") + 
+  theme_bw()
+
+model10_inf |>
+  ggplot(aes(x = obs, y = hat)) +
+  geom_segment(aes(xend = obs, y = 0, yend = hat), linewidth = 0.25) +
+  geom_hline(yintercept = leverage_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("hat-values") + 
+  theme_bw()
+
+model10_inf |>
+  ggplot(aes(x = obs, y = cooks)) +
+  geom_segment(aes(xend = obs, y = 0, yend = cooks), linewidth = 0.25) +
+  geom_hline(yintercept = cooks_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Cook's distance") + 
+  theme_bw()
+
+model10_inf |>
+  filter(abs(studentized) > 3 |
+         hat > leverage_cutoff |
+         cooks > cooks_cutoff
+  )
+```
+
+### 70.
+
+```{r model10 overdispersion check}
+check_overdispersion(model10)
+```
+
+## Models 11-12: probit, manually reduced variables
+
+### 71.
+
+```{r model4 lrts}
+model4_lrt <- Anova(model4)
+model4_lrt_p <- model4_lrt[, "Pr(>Chisq)"]
+
+cbind(model4_lrt, p.adj = p.adjust(model4_lrt_p, method = "BH")) |>
+  filter(p.adj > 0.05)
+```
+
+### 72.
+
+```{r model11 fit}
+model11 <- update(model4, . ~ . - gender:degree)
+summary(model11)
+```
+
+### 73.
+
+```{r model11 vs model4 lrt}
+anova(model4, model11)
+```
+
+### 74.
+
+```{r model11 lrts}
+model11_lrt <- Anova(model11)
+model11_lrt_p <- model11_lrt[, "Pr(>Chisq)"]
+
+cbind(model11_lrt, p.adj = p.adjust(model11_lrt_p, method = "BH")) |>
+  filter(p.adj > 0.05)
+```
+
+### 75.
+
+```{r model12 fit}
+model12 <- update(model11, . ~ . - religion:age)
+summary(model12)
+```
+
+### 76.
+
+```{r model12 vs model11 lrt}
+anova(model11, model12)
+```
+
+### 77.
+
+```{r model12 lrts}
+model12_lrt <- Anova(model12)
+model12_lrt_p <- model12_lrt[, "Pr(>Chisq)"]
+
+cbind(model12_lrt, p.adj = p.adjust(model12_lrt_p, method = "BH")) |>
+  filter(p.adj > 0.05)
+```
+
+### 78.
+
+```{r model12 gof test}
+pchisq(deviance(model12), df.residual(model12), lower.tail = FALSE)
+```
+
+### 79.
+
+```{r model12 sample size check}
+model12_df = data_frame()
+
+WVS$model12_preds <- fitted(model12, type="response")
+model12_df = data_frame(yes = WVS$yes,
+                       no = WVS$no,
+                       pred_yes = WVS$total * WVS$model12_preds,
+                       pred_no = WVS$total * (1 - WVS$model12_preds))
+
+sum(model12_df$pred_yes < 5)
+sum(model12_df$pred_yes < 1)
+sum(model12_df$pred_no < 5)
+sum(model12_df$pred_no < 1)
+```
+
+### 80.
+
+```{r model12 multicolineaity check}
+vif(model12)
+```
+
+### 81.
+
+```{r model12 residuals check}
+residualPlots(model12, type = "deviance", smooth=FALSE)
+residualPlots(model12, type = "pearson", smooth=FALSE)
+```
+
+### 82.
+
+```{r model12 influential obs check}
+p <- length(coef(model12))
+n <- nobs(model12)
+leverage_cutoff <-  (3*p)/n
+cooks_cutoff <- 2/sqrt(n)
+
+model12_inf <- data.frame(
+  obs = seq(n),
+  studentized = rstudent(model12),
+  hat = hatvalues(model12),
+  cooks = cooks.distance(model12)
+)
+
+model12_inf |>
+  ggplot(aes(x = obs, y = studentized)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.25) +
+  geom_hline(yintercept = -3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_hline(yintercept = 3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_segment(aes(xend = obs, y = 0, yend = studentized), linewidth = 0.25) +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Studentized residuals") + 
+  theme_bw()
+
+model12_inf |>
+  ggplot(aes(x = obs, y = hat)) +
+  geom_segment(aes(xend = obs, y = 0, yend = hat), linewidth = 0.25) +
+  geom_hline(yintercept = leverage_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("hat-values") + 
+  theme_bw()
+
+model12_inf |>
+  ggplot(aes(x = obs, y = cooks)) +
+  geom_segment(aes(xend = obs, y = 0, yend = cooks), linewidth = 0.25) +
+  geom_hline(yintercept = cooks_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Cook's distance") + 
+  theme_bw()
+
+model12_inf |>
+  filter(abs(studentized) > 3 |
+         hat > leverage_cutoff |
+         cooks > cooks_cutoff
+  )
+```
+
+### 83
+
+```{r model12 overdispersion check}
+check_overdispersion(model12)
+```
+
+## Models 13-14: cloglog, manually reduced variables
+
+### 84.
+
+```{r model6 lrts}
+model6_lrt <- Anova(model6)
+model6_lrt_p <- model6_lrt[, "Pr(>Chisq)"]
+
+cbind(model6_lrt, p.adj = p.adjust(model6_lrt_p, method = "BH")) |>
+  filter(p.adj > 0.05)
+```
+
+### 85.
+
+```{r model13 fit}
+model13 <- update(model6, . ~ . - gender:degree)
+summary(model13)
+```
+
+### 86.
+
+```{r model13 vs model6 lrt}
+anova(model6, model13)
+```
+
+### 87.
+
+```{r model13 lrts}
+model13_lrt <- Anova(model13)
+model13_lrt_p <- model13_lrt[, "Pr(>Chisq)"]
+
+cbind(model13_lrt, p.adj = p.adjust(model13_lrt_p, method = "BH")) |>
+  filter(p.adj > 0.05)
+```
+
+### 88.
+
+```{r model14 fit}
+model14 <- update(model13, . ~ . - religion:age)
+summary(model14)
+```
+
+### 89.
+
+```{r model14 vs model13 lrt}
+anova(model13, model14)
+```
+
+### 90.
+
+```{r model14 lrts}
+model14_lrt <- Anova(model14)
+model14_lrt_p <- model14_lrt[, "Pr(>Chisq)"]
+
+cbind(model14_lrt, p.adj = p.adjust(model14_lrt_p, method = "BH")) |>
+  filter(p.adj > 0.05)
+```
+
+### 91.
+
+```{r model14 gof test}
+pchisq(deviance(model14), df.residual(model14), lower.tail = FALSE)
+```
+
+### 92.
+
+```{r model14 sample size check}
+model14_df = data_frame()
+
+WVS$model14_preds <- fitted(model14, type="response")
+model14_df = data_frame(yes = WVS$yes,
+                       no = WVS$no,
+                       pred_yes = WVS$total * WVS$model14_preds,
+                       pred_no = WVS$total * (1 - WVS$model14_preds))
+
+sum(model14_df$pred_yes < 5)
+sum(model14_df$pred_yes < 1)
+sum(model14_df$pred_no < 5)
+sum(model14_df$pred_no < 1)
+```
+
+### 93.
+
+```{r model14 multicolineaity check}
+vif(model14)
+```
+
+### 94.
+
+```{r model14 residuals check}
+residualPlots(model14, type = "deviance", smooth=FALSE)
+residualPlots(model14, type = "pearson", smooth=FALSE)
+```
+
+### 95.
+
+```{r model14 influential obs check}
+p <- length(coef(model14))
+n <- nobs(model14)
+leverage_cutoff <-  (3*p)/n
+cooks_cutoff <- 2/sqrt(n)
+
+model14_inf <- data.frame(
+  obs = seq(n),
+  studentized = rstudent(model14),
+  hat = hatvalues(model14),
+  cooks = cooks.distance(model14)
+)
+
+model14_inf |>
+  ggplot(aes(x = obs, y = studentized)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.25) +
+  geom_hline(yintercept = -3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_hline(yintercept = 3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_segment(aes(xend = obs, y = 0, yend = studentized), linewidth = 0.25) +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Studentized residuals") + 
+  theme_bw()
+
+model14_inf |>
+  ggplot(aes(x = obs, y = hat)) +
+  geom_segment(aes(xend = obs, y = 0, yend = hat), linewidth = 0.25) +
+  geom_hline(yintercept = leverage_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("hat-values") + 
+  theme_bw()
+
+model14_inf |>
+  ggplot(aes(x = obs, y = cooks)) +
+  geom_segment(aes(xend = obs, y = 0, yend = cooks), linewidth = 0.25) +
+  geom_hline(yintercept = cooks_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Cook's distance") + 
+  theme_bw()
+
+model14_inf |>
+  filter(abs(studentized) > 3 |
+         hat > leverage_cutoff |
+         cooks > cooks_cutoff
+  )
+```
+
+### 96.
+
+```{r model14 overdispersion check}
+check_overdispersion(model14)
+```
+
+## Models 15-16: loglog, manually reduced variables
+
+### 97.
+
+```{r model8 lrts}
+model8_lrt <- Anova(model8)
+model8_lrt_p <- model8_lrt[, "Pr(>Chisq)"]
+
+cbind(model8_lrt, p.adj = p.adjust(model8_lrt_p, method = "BH")) |>
+  filter(p.adj > 0.05)
+```
+
+### 98.
+
+```{r model15 fit}
+model15 <- update(model8, . ~ . - gender:degree)
+summary(model15)
+```
+
+### 99.
+
+```{r model15 vs model8 lrt}
+anova(model8, model15)
+```
+
+### 100.
+
+```{r model15 lrts}
+model15_lrt <- Anova(model15)
+model15_lrt_p <- model15_lrt[, "Pr(>Chisq)"]
+
+cbind(model15_lrt, p.adj = p.adjust(model15_lrt_p, method = "BH")) |>
+  filter(p.adj > 0.05)
+```
+
+### 101.
+
+```{r fit model16}
+model16 <- update(model15, . ~ . - religion:age)
+summary(model16)
+```
+
+### 102.
+
+```{r model16 vs model15 lrt}
+anova(model15, model16)
+```
+
+### 103.
+
+```{r model16 lrts}
+model16_lrt <- Anova(model16)
+model16_lrt_p <- model16_lrt[, "Pr(>Chisq)"]
+
+cbind(model16_lrt, p.adj = p.adjust(model16_lrt_p, method = "BH")) |>
+  filter(p.adj > 0.05)
+```
+
+### 104.
+
+```{r model16 gof test}
+pchisq(deviance(model16), df.residual(model16), lower.tail = FALSE)
+```
+
+### 105.
+
+```{r model16 sample size check}
+model16_df = data_frame()
+
+WVS$model16_preds <- fitted(model16, type="response")
+model16_df = data_frame(yes = WVS$yes,
+                       no = WVS$no,
+                       pred_yes = WVS$total * WVS$model16_preds,
+                       pred_no = WVS$total * (1 - WVS$model16_preds))
+
+sum(model16_df$pred_yes < 5)
+sum(model16_df$pred_yes < 1)
+sum(model16_df$pred_no < 5)
+sum(model16_df$pred_no < 1)
+```
+
+### 106.
+
+```{r model16 multicolineaity check}
+vif(model16)
+```
+
+### 107.
+
+```{r model16 residuals check}
+residualPlots(model16, type = "deviance", smooth=FALSE)
+residualPlots(model16, type = "pearson", smooth=FALSE)
+```
+
+### 108.
+
+```{r model16 influential obs check}
+p <- length(coef(model16))
+n <- nobs(model16)
+leverage_cutoff <-  (3*p)/n
+cooks_cutoff <- 2/sqrt(n)
+
+model16_inf <- data.frame(
+  obs = seq(n),
+  studentized = rstudent(model16),
+  hat = hatvalues(model16),
+  cooks = cooks.distance(model16)
+)
+
+model16_inf |>
+  ggplot(aes(x = obs, y = studentized)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.25) +
+  geom_hline(yintercept = -3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_hline(yintercept = 3, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_segment(aes(xend = obs, y = 0, yend = studentized), linewidth = 0.25) +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Studentized residuals") + 
+  theme_bw()
+
+model16_inf |>
+  ggplot(aes(x = obs, y = hat)) +
+  geom_segment(aes(xend = obs, y = 0, yend = hat), linewidth = 0.25) +
+  geom_hline(yintercept = leverage_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("hat-values") + 
+  theme_bw()
+
+model16_inf |>
+  ggplot(aes(x = obs, y = cooks)) +
+  geom_segment(aes(xend = obs, y = 0, yend = cooks), linewidth = 0.25) +
+  geom_hline(yintercept = cooks_cutoff, linetype = "dashed", linewidth = 0.25, color = "red") +
+  geom_point(shape = 1) +
+  xlab("Index") +
+  ylab("Cook's distance") + 
+  theme_bw()
+
+model16_inf |>
+  filter(abs(studentized) > 3 |
+         hat > leverage_cutoff |
+         cooks > cooks_cutoff
+  )
+```
+
+### 109.
+
+```{r model16 overdispersion check}
+check_overdispersion(model16)
+```
+
+## Model 10, 12, 14, 16 AIC comparisons
+
+### 110.
+
+```{r final aic}
+AIC(model10)
+AIC(model12)
+AIC(model14)
+AIC(model16)
+```
+
+## Final Model: Model 10
+
+### 111.
+
+```{r model10 vs full model lrt}
+full_model <- glm(cbind(yes, no) ~ (gender + religion + degree + country + age)^2, family = binomial(link="logit"), data = WVS)
+
+anova(model10, full_model)
+```
+
+```{r final model}
+summary(model10)
+```
+
+### 112.
+
+```{r final model predictions}
+WVS$final_fits <- fitted(model10)
+```
+
+### 113.
+
+```{r final model roc-auc}
+model10_ungrp <- glm(formula = resp ~ gender + religion + degree + country + age + religion:degree + religion:country + degree:country + country:age, family = binomial(link = "logit"), data = WVS_ungrouped)
+
+
+WVS_ungrouped$final_fits <- fitted(model10_ungrp)
+
+roc <- roc(data = WVS_ungrouped,
+                  response = resp,
+                  predictor = final_fits,
+                  auc=TRUE, plot=TRUE)
+auc(roc)
+```
+
+### 114.
+
+```{r final model predictive power}
+WVS_ungrouped$pred_resp <- ifelse(WVS_ungrouped$final_fits > 0.5, 1, 0)
+
+WVS_ungrouped$pred_resp <- factor(WVS_ungrouped$pred_resp, levels = c(0, 1))
+WVS_ungrouped$resp <- factor(WVS_ungrouped$resp, levels = c(0, 1))
+
+confusionMatrix(data = WVS_ungrouped$pred_resp, reference = WVS_ungrouped$resp, positive = "1")
+```
