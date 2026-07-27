@@ -5,7 +5,7 @@ March 14, 2026
 
 ## Data
 
-This analysis is based on data collected from 5,381 adults in 4 different countries as part of the World Values Survey in 1996-1997.
+This analysis is based on data collected from 5,381 adults in 4 different countries as part of the World Values Survey in 1995-1997.
 
 There are 128 rows in the data set — one for each combination of the following 5 categorical predictor variables: 
 - **gender** subject’s gender (0 = female, 1 = male)
