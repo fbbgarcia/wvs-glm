@@ -22,7 +22,7 @@ For each predictor combinations, we have three columns representing the count of
 
 Because the World Values Survey response variable is binomial, I began my analysis with a logit model using the main effects of all predictor variables. This model showed lack of fit, so I tried probit, loglog, and cloglog link functions with the same predictors to see if any would better fit the data. These initial models also showed lack of fit, so I then tried stepwise regression on all main effects and 2-way interactions, with each link. The variable selection improved the fit of all four initial models. At this point, there were no issues with any model, and they all performed similarly. I continued with manual variable reduction using a 5% false discovery rate for all four models. The resulting models still performed similarly with equal complexity. The loglog model had a slightly better AIC value, but I ultimately chose the logit model as my final model because its interpretations better fit the context of the data.
 
-Each step of the model selection process is recorded in the project log.
+Each step of the model selection process is recorded in the [project log](log.md).
 
 ## Final Model
 
